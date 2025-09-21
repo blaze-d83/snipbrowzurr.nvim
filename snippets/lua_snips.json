@@ -1,0 +1,39 @@
+{
+  "Local function": {
+    "prefix": "lfn",
+    "body": [
+      "local function ${1:name}(${2:...})",
+      "  ${3:-- body}",
+      "end",
+      "$0"
+    ],
+    "description": "Create a local function"
+  },
+
+  "Module template": {
+    "prefix": "mod",
+    "body": [
+      "local ${1:M} = {}",
+      "",
+      "function ${1:M}.${2:func}(${3:...})",
+      "  ${4:-- body}",
+      "end",
+      "",
+      "return ${1:M}",
+      "$0"
+    ],
+    "description": "Simple module/table template (mirrors module name)"
+  },
+
+  "for ipairs loop": {
+    "prefix": "forip",
+    "body": [
+      "for ${1:i}, ${2:v} in ipairs(${3:tbl}) do",
+      "  ${4:-- body}",
+      "end",
+      "$0"
+    ],
+    "description": "Loop over array-like table using ipairs"
+  }
+}
+
