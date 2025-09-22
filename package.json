@@ -3,7 +3,7 @@
   "engines": { "vscode": "^1.11.0" },
   "contributes": {
     "snippets": [
-      { "language": ["lua"], "path": "./snippets/lua_snips.json" },
+      { "language": ["lua"], "path": "./snippets/lua_snips.json" }
     ]
   }
 }
