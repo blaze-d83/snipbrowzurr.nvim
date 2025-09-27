@@ -15,20 +15,28 @@ vim.opt.rtp:prepend(lazypath)
 
 -- Optional: sensible leader for testing
 vim.g.mapleader = " "
+vim.o.number = true
+vim.o.relativenumber = true
+vim.keymap.set("n", "<leader>-", "<cmd>Ex<CR>", { desc = "Open netrw" })
+vim.keymap.set("n", "<leader>ws", "<cmd>w<CR>", { desc = "Save / Update current file" })
+vim.keymap.set("n", "<leader>wq", "<cmd>wq<CR>", { desc = "Save and Quit" })
+vim.keymap.set("n", "<leader><leader>x", "<cmd>source %<CR>")
+vim.keymap.set("n", "<leader>x", ":.lua<CR>")
+vim.keymap.set("v", "<leader>x", ":lua<CR>")
 
 -- helper: path to this plugin repo root (where you placed debug/)
 local repo_root = vim.fn.fnamemodify(".", ":p") -- ends with /
 
 require("lazy").setup({
 	-- LuaSnip (snippet engine)
+
 	{
 		"L3MON4D3/LuaSnip",
 		dependencies = {
-			-- optional collection of ready-to-use VSCode snippets
 			"rafamadriz/friendly-snippets",
 		},
 		config = function()
-			require("luasnip.loaders.from_vscode").load({})
+			require("luasnip.loaders.from_vscode").lazy_load()
 		end,
 	},
 

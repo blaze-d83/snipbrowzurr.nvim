@@ -1,9 +1,10 @@
--- lua/snipbrowzurr.lua
--- Minimal snippet browser for LuaSnip / VSCode snippets.
--- Shows a picker for snippets of current filetype, previews body in a floating window,
--- and expands the snippet with <C-y> (or <CR>) from the preview.
+-- lua/plugin/snipbrowzurr.lua
+-- Minimal snippet browser for LuaSnip.
+-- Shows a picker for snippets of current filetype and expands the chosen snippet
+-- directly in the current window so placeholders remain jumpable.
 
 local M = {}
+local api = vim.api
 
 -- safe require helper
 local function safe_require(name)
@@ -36,6 +37,7 @@ local function snippet_label(sn)
 		sn.description,
 		sn.desc,
 		sn.dscr,
+		sn.descr,
 		sn.trigger,
 		sn.trig,
 		sn.prefix,
@@ -65,9 +67,6 @@ local function collect_snippets(filetype)
 	end)
 	local raw = ok and result or nil
 
-	-- debug (optional)
-	-- vim.notify("luasnip.get_snippets raw: " .. vim.inspect(raw), vim.log.levels.DEBUG)
-
 	if not raw then
 		return {}
 	end
@@ -84,7 +83,7 @@ local function collect_snippets(filetype)
 
 	local list = {}
 
-	-- Use vim.tbl_islist which is available on stable Neovim builds
+	-- Use vim.tbl_islist to detect list-shaped tables
 	if type(raw) == "table" and vim.tbl_islist(raw) then
 		for _, sn in ipairs(raw) do
 			table.insert(list, sn)
@@ -123,8 +122,7 @@ local function snippet_body_text(sn)
 		return sn.body
 	end
 
-	-- Some snippet objects produced by LuaSnip may expose nodes.
-	-- Try a couple of heuristics:
+	-- Some snippet objects produced by LuaSnip may expose get_doc()
 	if type(sn.get_doc) == "function" then
 		local ok, val = pcall(sn.get_doc, sn)
 		if ok and val then
@@ -132,6 +130,7 @@ local function snippet_body_text(sn)
 		end
 	end
 
+	-- Some LuaSnip snippet objects expose nodes; best-effort inspect
 	if sn.nodes and type(sn.nodes) == "table" and #sn.nodes > 0 then
 		local out = {}
 		for _, node in ipairs(sn.nodes) do
@@ -144,34 +143,7 @@ local function snippet_body_text(sn)
 	return vim.inspect(sn)
 end
 
--- open preview floating window and return buf, win
-local function open_floating_preview(lines, opts)
-	opts = opts or {}
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = bufnr })
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-	vim.api.nvim_set_option_value("filetype", "markdown", { buf = bufnr })
-
-	local width = opts.width or math.min(80, math.max(40, math.floor(vim.o.columns * 0.6)))
-	local height = opts.height or math.min(30, math.max(6, math.floor(vim.o.lines * 0.5)))
-	local row = math.floor((vim.o.lines - height) / 2 - 1)
-	local col = math.floor((vim.o.columns - width) / 2)
-
-	local win = vim.api.nvim_open_win(bufnr, true, {
-		relative = "editor",
-		row = row,
-		col = col,
-		width = width,
-		height = height,
-		style = "minimal",
-		border = "rounded",
-	})
-
-	return bufnr, win
-end
-
--- replace this whole function in your file
+-- expand snippet (or paste fallback text) into target window/buffer
 local function expand_snippet_in_window(winid, snip_or_text)
 	local ls = safe_require("luasnip")
 	if not ls then
@@ -180,14 +152,12 @@ local function expand_snippet_in_window(winid, snip_or_text)
 	end
 
 	-- switch to target window if valid (so expansion inserts in the right place)
-	if winid and vim.api.nvim_win_is_valid(winid) then
-		vim.api.nvim_set_current_win(winid)
+	if winid and api.nvim_win_is_valid(winid) then
+		api.nvim_set_current_win(winid)
 	end
 
 	-- Ensure we're in insert mode so placeholders can be active after expansion.
-	local entered_insert = false
 	if vim.fn.mode() ~= "i" then
-		entered_insert = true
 		vim.cmd("startinsert")
 	end
 
@@ -198,9 +168,22 @@ local function expand_snippet_in_window(winid, snip_or_text)
 
 	-- 1) If we're given a plain string, try lsp_expand (handles VSCode snippet syntax)
 	if type(snip_or_text) == "string" and snip_or_text ~= "" then
-		if try(function()
-			ls.lsp_expand(snip_or_text)
-		end) then
+		if
+			try(function()
+				-- some LuaSnip installs provide lsp_expand
+				if ls.lsp_expand then
+					ls.lsp_expand(snip_or_text)
+				else
+					-- fallback: try parser -> snip_expand
+					if ls.parser and ls.parser.parse_snippet and ls.snip_expand then
+						local parsed = ls.parser.parse_snippet(nil, snip_or_text, {})
+						ls.snip_expand(parsed)
+					else
+						error("no lsp_expand/parser available")
+					end
+				end
+			end)
+		then
 			return
 		end
 	end
@@ -211,16 +194,34 @@ local function expand_snippet_in_window(winid, snip_or_text)
 
 		-- 2a) VSCode loader style: body may be string or table
 		if type(sn.body) == "string" then
-			if try(function()
-				ls.lsp_expand(sn.body)
-			end) then
+			if
+				try(function()
+					if ls.lsp_expand then
+						ls.lsp_expand(sn.body)
+					elseif ls.parser and ls.parser.parse_snippet and ls.snip_expand then
+						local parsed = ls.parser.parse_snippet(nil, sn.body, {})
+						ls.snip_expand(parsed)
+					else
+						error("no lsp_expand/parser available")
+					end
+				end)
+			then
 				return
 			end
 		elseif type(sn.body) == "table" then
 			local body = table.concat(sn.body, "\n")
-			if try(function()
-				ls.lsp_expand(body)
-			end) then
+			if
+				try(function()
+					if ls.lsp_expand then
+						ls.lsp_expand(body)
+					elseif ls.parser and ls.parser.parse_snippet and ls.snip_expand then
+						local parsed = ls.parser.parse_snippet(nil, body, {})
+						ls.snip_expand(parsed)
+					else
+						error("no lsp_expand/parser available")
+					end
+				end)
+			then
 				return
 			end
 		end
@@ -229,9 +230,18 @@ local function expand_snippet_in_window(winid, snip_or_text)
 		if type(sn.get_doc) == "function" then
 			local ok, doc = pcall(sn.get_doc, sn)
 			if ok and type(doc) == "string" and doc ~= "" then
-				if try(function()
-					ls.lsp_expand(doc)
-				end) then
+				if
+					try(function()
+						if ls.lsp_expand then
+							ls.lsp_expand(doc)
+						elseif ls.parser and ls.parser.parse_snippet and ls.snip_expand then
+							local parsed = ls.parser.parse_snippet(nil, doc, {})
+							ls.snip_expand(parsed)
+						else
+							error("no lsp_expand/parser available")
+						end
+					end)
+				then
 					return
 				end
 			end
@@ -240,9 +250,23 @@ local function expand_snippet_in_window(winid, snip_or_text)
 		-- 2c) If this looks like a LuaSnip snippet object (nodes present), expand it directly
 		if sn.nodes and type(sn.nodes) == "table" and #sn.nodes > 0 then
 			-- try snip_expand (LuaSnip object expansion)
-			if try(function()
-				ls.snip_expand(sn)
-			end) then
+			if
+				try(function()
+					-- prefer snip_expand if exposed
+					if ls.snip_expand then
+						ls.snip_expand(sn)
+					else
+						-- as a fallback, try to parse snippet body text and expand
+						local body = snippet_body_text(sn)
+						if ls.parser and ls.parser.parse_snippet and ls.snip_expand then
+							local parsed = ls.parser.parse_snippet(nil, body, {})
+							ls.snip_expand(parsed)
+						else
+							error("no snip_expand/parser available")
+						end
+					end
+				end)
+			then
 				return
 			end
 		end
@@ -268,7 +292,7 @@ local function expand_snippet_in_window(winid, snip_or_text)
 
 	-- Last resort: insert readable fallback text (avoid inserting huge inspect blobs when possible)
 	local text = snippet_body_text(snip_or_text)
-	vim.api.nvim_put(vim.split(text, "\n", { plain = true }), "c", true, true)
+	api.nvim_put(vim.split(text, "\n", { plain = true }), "c", true, true)
 	vim.notify("Snippet expansion failed; inserted fallback text", vim.log.levels.WARN)
 end
 
@@ -303,42 +327,9 @@ function M.show(opts)
 		if not choice then
 			return
 		end
-		local raw = choice.raw
-		local body = snippet_body_text(raw)
-		local lines = vim.split(body, "\n", { plain = true })
-
-		-- remember original window so we can expand there
-		local orig_win = vim.api.nvim_get_current_win()
-		local bufnr, win = open_floating_preview(lines, { width = opts.width, height = opts.height })
-
-		-- map q and <esc> inside preview to close
-		vim.keymap.set("n", "q", function()
-			if vim.api.nvim_win_is_valid(win) then
-				vim.api.nvim_win_close(win, true)
-			end
-		end, { buffer = bufnr, nowait = true, silent = true })
-
-		vim.keymap.set("n", "<esc>", function()
-			if vim.api.nvim_win_is_valid(win) then
-				vim.api.nvim_win_close(win, true)
-			end
-		end, { buffer = bufnr, nowait = true, silent = true })
-
-		-- map <C-y> to expand the snippet in the original window
-		vim.keymap.set("n", "<C-y>", function()
-			if vim.api.nvim_win_is_valid(win) then
-				vim.api.nvim_win_close(win, true)
-			end
-			expand_snippet_in_window(orig_win, raw) -- was raw already; keep this
-		end, { buffer = bufnr, nowait = true, silent = true })
-
-		-- Optional: map Enter to expand as well — pass raw instead of body
-		vim.keymap.set("n", "<CR>", function()
-			if vim.api.nvim_win_is_valid(win) then
-				vim.api.nvim_win_close(win, true)
-			end
-			expand_snippet_in_window(orig_win, raw) -- changed from body to raw
-		end, { buffer = bufnr, nowait = true, silent = true })
+		-- expand in the original window so placeholders remain usable
+		local orig_win = api.nvim_get_current_win()
+		expand_snippet_in_window(orig_win, choice.raw)
 	end)
 end
 
@@ -353,15 +344,15 @@ function M.setup(user_opts)
 	local keymap = user_opts.keymap or "<leader>ss"
 
 	-- create a command
-	vim.api.nvim_create_user_command("LuSnipList", function()
+	api.nvim_create_user_command("LuaSnipList", function()
 		M.show_current()
-	end, { desc = "Show LuaSnip snippets for current ft" })
+	end, { desc = "Show LuaSnip snippets for current file" })
 
 	-- create keymap if desired
 	if keymap and keymap ~= "" then
 		vim.keymap.set("n", keymap, function()
 			M.show_current()
-		end, { desc = "Show snippets for current ft" })
+		end, { desc = "Show snippets for current file" })
 	end
 
 	-- optional: lazy-load vscode snippets from a path (default: ~/.config/nvim/snippets)

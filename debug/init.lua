@@ -7,7 +7,3 @@ vim.opt.rtp:prepend(vim.fn.fnamemodify(".", ":p"))
 -- Load lazy.nvim and test plugins
 require("debug.lazy")
 
--- Optional: basic settings so nvim feels normal
-vim.opt.number = true
-vim.opt.relativenumber = true
-
