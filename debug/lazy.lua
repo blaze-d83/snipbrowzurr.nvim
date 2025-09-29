@@ -24,6 +24,8 @@ vim.keymap.set("n", "<leader><leader>x", "<cmd>source %<CR>")
 vim.keymap.set("n", "<leader>x", ":.lua<CR>")
 vim.keymap.set("v", "<leader>x", ":lua<CR>")
 
+vim.cmd.colorscheme("default")
+
 -- helper: path to this plugin repo root (where you placed debug/)
 local repo_root = vim.fn.fnamemodify(".", ":p") -- ends with /
 

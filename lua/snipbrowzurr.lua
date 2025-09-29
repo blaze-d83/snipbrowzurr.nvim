@@ -4,6 +4,8 @@
 local M = {}
 local api = vim.api
 
+-- Returns a module name or nil
+-- safe_require() -> module | nil
 local function safe_require(name)
 	local ok, mod = pcall(require, name)
 	if not ok then
@@ -12,6 +14,8 @@ local function safe_require(name)
 	return mod
 end
 
+-- Determine the filetype of the current buffer
+-- get_filetype() -> string
 local function get_filetype()
 	local ft = vim.bo.filetype
 	if ft and ft ~= "" then
@@ -20,12 +24,27 @@ local function get_filetype()
 	return vim.filetype.match({ buf = 0 }) or "text"
 end
 
+-- Returns: flat array of snippet objects (may be empty)
+--
+-- Take the raw snippet structure returned by luasnip (which can be nested
+-- and mixed between dictionary-like tables and lists) and return a flat
+-- array of snippet-like tables.
+--
+-- The function recognizes snippet-like objects by the presence of fields
+-- such as `body`, `trigger`, `prefix`, `get_doc`, or `nodes`. It will
+-- recursively descend into tables that don't look like snippets.
+--
+-- Parameters:
+-- - raw: (table) arbitrary nested table returned by luasnip.get_snippets
+-- - out: (table|nil) optional accumulator used during recursion
+--
+-- flatten_snippets(raw, out) -> table
 local function flatten_snippets(raw, out)
 	out = out or {}
 	if type(raw) ~= "table" then
 		return out
 	end
-	if vim.tbl_islist(raw) then
+	if vim.islist(raw) then
 		for _, v in ipairs(raw) do
 			if type(v) == "table" then
 				flatten_snippets(v, out)
@@ -35,7 +54,7 @@ local function flatten_snippets(raw, out)
 	end
 	for _, v in pairs(raw) do
 		if type(v) == "table" then
-			if vim.tbl_islist(v) then
+			if vim.islist(v) then
 				for _, e in ipairs(v) do
 					if type(e) == "table" then
 						table.insert(out, e)
@@ -57,6 +76,20 @@ local function flatten_snippets(raw, out)
 	return out
 end
 
+-- Returns: flat array of snippet objects produced by flatten_snippets.
+--
+-- Collect snippets for the given filetype using luasnip. If luasnip is
+-- not available or returns an empty set, an empty table is returned.
+--
+-- Special handling:
+-- - luasnip may return an object with a `.tbl` key. In that case we use
+-- `.tbl` as the snippet container before flattening.
+--
+-- Parameters:
+-- - filetype: optional string; if omitted the current buffer's filetype
+-- is used (via get_filetype()).
+--
+-- collect_snippets(filetype?) -> table
 local function collect_snippets(filetype)
 	local ls = safe_require("luasnip")
 	if not ls then
@@ -75,6 +108,18 @@ local function collect_snippets(filetype)
 	return flatten_snippets(raw, {})
 end
 
+-- Returns: string label (never nil)
+--
+-- Produce a short, human-readable label for a snippet. This label is used
+-- in the list UI and should be concise. The function prefers fields in the
+-- following order: name, description/desc/dscr/desr, trigger/trig, prefix,
+-- opts.description. If none of those exist it falls back to `vim.inspect`
+-- of the snippet (trimmed) or a placeholder for `nil`.
+--
+-- Parameters:
+-- - sn: snippet table (may be nil)
+--
+-- snippet_label(snippet) -> string
 local function snippet_label(sn)
 	if not sn then
 		return "<nil-snippet>"
@@ -104,6 +149,15 @@ local function snippet_label(sn)
 	return "<snippet>"
 end
 
+-- Convert a snippet's body into plain text suitable for insertion into a
+-- buffer when expansion via LuaSnip fails. Supports several snippet shapes:
+-- - body: string -> returned as-is
+-- - body: table -> lines joined with "\n"
+-- - get_doc: function -> call and use returned string if valid
+-- - nodes: table -> `vim.inspect` nodes and join them
+-- Fallback: inspect the snippet and return the string representation.
+--
+-- snippet_body_text(snippet) -> string
 local function snippet_body_text(sn)
 	if not sn then
 		return ""
@@ -133,6 +187,16 @@ local function snippet_body_text(sn)
 	return (ok and s) or ""
 end
 
+-- Attempt to expand text as a snippet using LuaSnip extension points.
+-- The function tries the following in order, returning true on first
+-- successful attempt:
+-- 1) ls.lsp_expand(text)
+-- 2) parsed = ls.parser.parse_snippet(nil, text, {}); ls.snip_expand(parsed)
+--
+-- The function uses pcall to avoid throwing on missing or failing
+-- implementation details; return `true` only if expansion succeeded.
+--
+-- try_expand_with_text(ls, text) -> boolean
 local function try_expand_with_text(ls, text)
 	if not text or text == "" then
 		return false
@@ -161,6 +225,16 @@ local function try_expand_with_text(ls, text)
 	return false
 end
 
+-- Expand the given snippet (or raw text) into the given window's buffer.
+-- If `winid` is valid the function will switch to that window prior to
+-- expansion and ensure the editor is in insert mode. Expansion attempts
+-- are resilient: several strategies are tried via try_expand_with_text.
+--
+-- If expansion ultimately fails, the function inserts a fallback plain
+-- text representation of the snippet (using snippet_body_text) with
+-- `nvim_put` and warns the user via `vim.notify`.
+--
+-- expand_snippet_in_window(winid?, snip_or_text)
 local function expand_snippet_in_window(winid, snip_or_text)
 	local ls = safe_require("luasnip")
 	if not ls then
@@ -236,22 +310,34 @@ local function expand_snippet_in_window(winid, snip_or_text)
 		end
 	end
 
+	-- Fallback: Insert plain text insertion
 	local text = snippet_body_text(snip_or_text)
 	api.nvim_put(vim.split(text, "\n", { plain = true }), "c", true, true)
 	vim.notify("Snippet expansion failed; inserted fallback text", vim.log.levels.WARN)
 end
 
+-- Close a window if it is valid. Uses pcall to avoid errors when the
+-- window closes concurrently or becomes invalid.
 local function safe_close_win(win)
 	if win and api.nvim_win_is_valid(win) then
 		pcall(api.nvim_win_close, win, true)
 	end
 end
+
+-- Delete a buffer if it is valid. This is used when cleaning up the
+-- temporary search/list buffers created by the plugin.
 local function safe_delete_buf(buf)
 	if buf and api.nvim_buf_is_valid(buf) then
 		pcall(api.nvim_buf_delete, buf, { force = true })
 	end
 end
 
+-- Perform a simple fuzzy subsequence match: every non-space char of the
+-- pattern must appear in the haystack in order. Case-insensitive.
+--
+-- Examples:
+-- fuzzy_match("HelloWorld", "hwd") -> true
+-- fuzzy_match("abc", "d") -> false
 local function fuzzy_match(hay, pat)
 	if not pat or pat == "" then
 		return true
@@ -307,13 +393,13 @@ function M.show(opts)
 	local search_buf = api.nvim_create_buf(false, true)
 	local list_buf = api.nvim_create_buf(false, true)
 
-	api.nvim_buf_set_option(search_buf, "bufhidden", "wipe")
-	api.nvim_buf_set_option(list_buf, "bufhidden", "wipe")
-	api.nvim_buf_set_option(search_buf, "buftype", "nofile")
-	api.nvim_buf_set_option(list_buf, "buftype", "nofile")
-	api.nvim_buf_set_option(search_buf, "modifiable", true)
-	api.nvim_buf_set_option(list_buf, "modifiable", false)
-	api.nvim_buf_set_option(search_buf, "filetype", "snipbrowzurr_search")
+	api.nvim_set_option_value("bufhidden", "wipe", { buf = search_buf })
+	api.nvim_set_option_value("bufhidden", "wipe", { buf = list_buf })
+	api.nvim_set_option_value("buftype", "nofile", { buf = search_buf })
+	api.nvim_set_option_value("buftype", "nofile", { buf = list_buf })
+	api.nvim_set_option_value("modifiable", true, { buf = search_buf })
+	api.nvim_set_option_value("modifiable", false, { buf = list_buf })
+	api.nvim_set_option_value("filetype", "snipbrowzurr_search", { buf = search_buf })
 	pcall(api.nvim_buf_set_name, search_buf, "SnipSearch")
 	pcall(api.nvim_buf_set_lines, search_buf, 0, -1, false, { "" })
 
@@ -335,7 +421,7 @@ function M.show(opts)
 		width = width,
 		height = list_h,
 		style = "minimal",
-		border = "single",
+		border = "rounded",
 		title = string.format("Snippets for %s (%d)", ft, #items),
 	})
 
@@ -358,15 +444,16 @@ function M.show(opts)
 		for i, it in ipairs(filtered) do
 			lines[#lines + 1] = format_item_display(it, (i == selected_idx))
 		end
-		api.nvim_buf_set_option(list_buf, "modifiable", true)
+		api.nvim_set_option_value("modifiable", true, { buf = list_buf })
 		api.nvim_buf_set_lines(list_buf, 0, -1, false, lines)
-		api.nvim_buf_set_option(list_buf, "modifiable", false)
+		api.nvim_set_option_value("modifiable", false, { buf = list_buf })
 
 		-- highlights: clear then highlight selected line for clear visual focus
 		api.nvim_buf_clear_namespace(list_buf, ns, 0, -1)
 		if selected_idx >= 1 and selected_idx <= #filtered then
 			-- highlight the entire selected line
-			api.nvim_buf_add_highlight(list_buf, ns, "Visual", selected_idx - 1, 0, -1)
+			api.nvim_buf_set_extmark(list_buf, ns, selected_idx - 1, 0, { hl_group = "Visual" })
+			-- api.nvim_buf_add_highlight(list_buf, ns, "Visual", selected_idx - 1, 0, -1)
 		end
 		-- Note: do NOT change windows/cursor here (we keep focus in search buffer)
 	end
@@ -374,6 +461,7 @@ function M.show(opts)
 	render_list()
 
 	local function close_popup()
+		-- Close windows and delete buffers safely
 		safe_close_win(search_win)
 		safe_close_win(list_win)
 		safe_delete_buf(search_buf)
@@ -463,9 +551,9 @@ function M.show(opts)
 			selected_idx = 0
 		end
 		if #filtered == 0 then
-			api.nvim_buf_set_option(list_buf, "modifiable", true)
+			api.nvim_set_option_value("modifiable", true, { buf = list_buf })
 			api.nvim_buf_set_lines(list_buf, 0, -1, false, { "<no matches>" })
-			api.nvim_buf_set_option(list_buf, "modifiable", false)
+			api.nvim_set_option_value("modifiable", false, { buf = list_buf })
 			api.nvim_buf_clear_namespace(list_buf, ns, 0, -1)
 		else
 			render_list()
@@ -497,7 +585,8 @@ function M.show(opts)
 		return function()
 			change_selection(delta)
 			-- re-enter insert so user can keep typing seamlessly
-			pcall(vim.cmd, "startinsert")
+			vim.cmd("startinsert")
+			-- pcall(vim.cmd, "startinsert")
 		end
 	end
 
@@ -540,6 +629,14 @@ function M.show_current()
 	M.show({ filetype = get_filetype() })
 end
 
+-- Configure the plugin: installs a user command and a keymap, and (by
+-- default) attempts to lazy-load VSCode-style snippets via "luasnip.loaders.from_vscode".
+--
+-- Parameters:
+-- - user_opts: table (optional)
+-- - keymap: string (default: "<leader>ss") - maps a key to show snippets
+-- - load_vscode: boolean (default: true) - attempt to lazy-load vscode snippets
+-- - vscode_snippets_path: string|false - path to search for vscode snippet files
 function M.setup(user_opts)
 	user_opts = user_opts or {}
 	local keymap = user_opts.keymap or "<leader>ss"

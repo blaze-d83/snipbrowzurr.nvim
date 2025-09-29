@@ -1,10 +1,5 @@
-print('hello world 1')
-print('hello world 2')
-print('hello world 3')
+M = {}
 
-
-Foo = {}
-
-Foo.new = function()
+M.new = function()
 	
-end 
+end
