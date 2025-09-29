@@ -382,6 +382,7 @@ function M.show(opts)
 		})
 	end
 
+	-- window options
 	local orig_win = api.nvim_get_current_win()
 	local width = math.min(80, math.max(40, math.floor(vim.o.columns * 0.6)))
 	local height = math.min(20, math.max(6, math.floor(vim.o.lines * 0.4)))
@@ -390,6 +391,7 @@ function M.show(opts)
 	local row = math.floor((vim.o.lines - height) / 2)
 	local col = math.floor((vim.o.columns - width) / 2)
 
+	-- two buffers: search and list
 	local search_buf = api.nvim_create_buf(false, true)
 	local list_buf = api.nvim_create_buf(false, true)
 
@@ -403,6 +405,7 @@ function M.show(opts)
 	pcall(api.nvim_buf_set_name, search_buf, "SnipSearch")
 	pcall(api.nvim_buf_set_lines, search_buf, 0, -1, false, { "" })
 
+	-- search window
 	local search_win = api.nvim_open_win(search_buf, true, {
 		relative = "editor",
 		row = row,
@@ -414,6 +417,7 @@ function M.show(opts)
 		title = "Search",
 	})
 
+	-- list window
 	local list_win = api.nvim_open_win(list_buf, true, {
 		relative = "editor",
 		row = row + search_h,
@@ -439,6 +443,7 @@ function M.show(opts)
 		return prefix .. label .. trig
 	end
 
+	-- TODO: implement a scroll navigation
 	local function render_list()
 		local lines = {}
 		for i, it in ipairs(filtered) do
@@ -635,11 +640,12 @@ end
 -- Parameters:
 -- - user_opts: table (optional)
 -- - keymap: string (default: "<leader>ss") - maps a key to show snippets
--- - load_vscode: boolean (default: true) - attempt to lazy-load vscode snippets
--- - vscode_snippets_path: string|false - path to search for vscode snippet files
 function M.setup(user_opts)
 	user_opts = user_opts or {}
 	local keymap = user_opts.keymap or "<leader>ss"
+
+	local default_path = vim.fn.stdpath("config") .. "/snippets"
+	local resolved_path = user_opts.snippets_path ~= nil and user_opts.snippets_path or default_path
 
 	api.nvim_create_user_command("LuaSnipList", function()
 		M.show_current()
@@ -650,15 +656,43 @@ function M.setup(user_opts)
 		end, { desc = "Show snippets for current file" })
 	end
 
-	if user_opts.load_vscode ~= false then
-		local ok, loader = pcall(require, "luasnip.loaders.from_vscode")
-		if ok and loader and user_opts.vscode_snippets_path ~= false then
-			local path = user_opts.vscode_snippets_path or (vim.fn.stdpath("config") .. "/snippets")
+	-- This function abstracts away repetitive loader logic and loads
+	-- multiple types of snippets by hitting appropriate LuaSnip APIs
+	local function load_loader(flag_name, loader_module, path_key_name)
+		if user_opts[flag_name] == false then
+			return
+		end
+		local ok, loader = pcall(require, loader_module)
+		if not ok or type(loader) ~= "table" then
+			return
+		end
+		local user_paths = user_opts[path_key_name]
+
+		local function do_lazy_load()
+			local opts = nil
+			if user_paths == nil then
+				opts = nil
+			else
+				local t = type(user_paths)
+				if t == "string" then
+					opts = { paths = { user_paths } }
+				elseif t == "table" then
+					opts = { paths = { user_paths } }
+				else
+					opts = nil
+				end
+			end
+
 			pcall(function()
-				loader.lazy_load({ paths = { path } })
+				loader.lazy_load(opts)
 			end)
 		end
+		do_lazy_load()
 	end
+
+	load_loader("load_vscode", "luasnip.loaders.from_vscode", resolved_path)
+	load_loader("load_lua", "luasnip.loaders.from_lua", resolved_path)
+	load_loader("load_snipmate", "luasnip.loaders.from_snipmate", resolved_path)
 end
 
 return M

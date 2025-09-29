@@ -49,6 +49,10 @@ require("lazy").setup({
 		config = function()
 			-- IMPORTANT: snipbrowzurr.setup expects `keymap` (singular) per the plugin code
 			require("snipbrowzurr").setup({
+				snippets_path = vim.fn.stdpath("config") .. "snippets",
+				load_vscode = true,
+				load_lua = true,
+				load_snipmate = true,
 				keymap = "<leader>ss", -- open snippet browser
 				-- other test options can go here
 			})
