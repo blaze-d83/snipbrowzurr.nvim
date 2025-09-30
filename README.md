@@ -2,8 +2,6 @@
 
 Tiny plugin to quickly browse snippets set for the current file-type.
 
-# Screenshots
-
 
 # Installation and setup guide
 
@@ -12,6 +10,7 @@ Add the plugin to your 'lazy' spec (example minimal):
 ```lua
 {
     "blaze-d83/snipbrowzurr.nvim",
+    tag = "v1.0.0"
     config = function()
         require("snipbrowzurr").setup({ keymap = "<leader>sp" })
     end,
@@ -22,9 +21,21 @@ Add the plugin to your 'lazy' spec (example minimal):
 ```lua
 use {
     'blaze-d83/snipbrowzurr.nvim',
+    tag = "v1.0.0"
     config = function()
         require('snippet_browser').setup({ keymap = '<leader>sp' })
     end
+}
+```
+
+# Configuration
+```lua
+-- Defaults
+opts = {
+    load_vscode = true,
+    load_lua = true,
+    load_snipmate = true,
+    keymap = "<leader>ss",
 }
 ```
 
