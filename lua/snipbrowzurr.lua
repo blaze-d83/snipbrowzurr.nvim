@@ -725,7 +725,4 @@ function M.setup(user_opts)
 	load_loader("load_snipmate", "luasnip.loaders.from_snipmate", resolved_path)
 end
 
--- Test suite
-M._flatten_snippets = flatten_snippets
-
 return M
