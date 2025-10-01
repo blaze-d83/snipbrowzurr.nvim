@@ -39,25 +39,55 @@ end
 -- - out: (table|nil) optional accumulator used during recursion
 --
 -- flatten_snippets(raw, out) -> table
-local function flatten_snippets(raw, out)
+local function flatten_snippets(raw, out, visited)
 	out = out or {}
+	visited = visited or {}
 	if type(raw) ~= "table" then
 		return out
 	end
+
+	-- avoid cycles
+	if visited[raw] then
+		return out
+	end
+	visited[raw] = true
+
+	-- If raw itself is a list-like table, recurse into elements
 	if vim.islist(raw) then
 		for _, v in ipairs(raw) do
 			if type(v) == "table" then
-				flatten_snippets(v, out)
+				flatten_snippets(v, out, visited)
 			end
 		end
 		return out
 	end
+
+	-- If the table itself looks like a snippets: record it
+	-- This covers the case where snippet like objects are passed as root
+	local function look_like_a_snippet(tbl)
+		if type(tbl) ~= "table" then
+			return false
+		end
+		if tbl.body or tbl.trigger or tbl.prefix or tbl.get_doc or tbl.nodes then
+			return true
+		end
+		return false
+	end
+
+	if look_like_a_snippet(raw) then
+		table.insert(out, raw)
+		return out
+	end
+
+  -- Otherwise walk the table fields
 	for _, v in pairs(raw) do
 		if type(v) == "table" then
 			if vim.islist(v) then
+				-- recursively process each element so snippet-like
+				-- objects nested inside are found
 				for _, e in ipairs(v) do
 					if type(e) == "table" then
-						table.insert(out, e)
+						flatten_snippets(e, out, visited)
 					end
 				end
 			else
@@ -68,7 +98,7 @@ local function flatten_snippets(raw, out)
 				if looks_like_snippet then
 					table.insert(out, v)
 				else
-					flatten_snippets(v, out)
+					flatten_snippets(v, out, visited)
 				end
 			end
 		end
@@ -694,5 +724,8 @@ function M.setup(user_opts)
 	load_loader("load_lua", "luasnip.loaders.from_lua", resolved_path)
 	load_loader("load_snipmate", "luasnip.loaders.from_snipmate", resolved_path)
 end
+
+-- Test suite
+M._flatten_snippets = flatten_snippets
 
 return M
