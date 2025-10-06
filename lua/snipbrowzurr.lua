@@ -392,6 +392,7 @@ local function fuzzy_match(hay, pat)
 	return true
 end
 
+
 -- Build and show the UI
 function M.show(opts)
 	opts = opts or {}
@@ -545,6 +546,7 @@ function M.show(opts)
 		render_list()
 	end
 
+  -- Filter the snippet list on each keystroke
 	local function do_filter()
 		local ok, lines = pcall(api.nvim_buf_get_lines, search_buf, 0, -1, false)
 		if not ok then
@@ -553,7 +555,7 @@ function M.show(opts)
 		local q = (lines and lines[1]) or ""
 		q = vim.trim(q)
 		if q == "" then
-			filtered = vim.deepcopy(items)
+			filtered = filtered
 		else
 			local tokens = {}
 			for token in q:gmatch("%S+") do
@@ -724,8 +726,5 @@ function M.setup(user_opts)
 	load_loader("load_lua", "luasnip.loaders.from_lua", resolved_path)
 	load_loader("load_snipmate", "luasnip.loaders.from_snipmate", resolved_path)
 end
-
--- Test suite
-M._flatten_snippets = flatten_snippets
 
 return M
