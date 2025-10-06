@@ -21,7 +21,7 @@ Add the plugin to your 'lazy' spec (example minimal):
 ```lua
 use {
     'blaze-d83/snipbrowzurr.nvim',
-    tag = "stable"
+    branch = "stable"
     config = function()
         require('snippet_browser').setup({ keymap = '<leader>sp' })
     end
