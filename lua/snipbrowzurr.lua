@@ -464,6 +464,7 @@ function M.show(opts)
 	-- state: filtered list and selected index
 	local filtered = vim.deepcopy(items)
 	local selected_idx = (#filtered > 0) and 1 or 0
+	local list_offset = 1
 
 	-- namespace for highlights
 	local ns = api.nvim_create_namespace("snipbrowzurr")
@@ -480,21 +481,34 @@ function M.show(opts)
 		return math.max(a, math.min(b, v))
 	end
 
+	local function max_offset(total, h)
+		return math.max(1, total - h + 1)
+	end
+
 	local function render_list()
 		local lines = {}
-		for i, it in ipairs(filtered) do
+		local total = #filtered
+		list_offset = clamp(list_offset, 1, max_offset(total, list_h))
+
+		local start_idx = list_offset
+		local end_idx = math.min(total, list_offset + list_h - 1)
+
+		for i = start_idx, end_idx do
+			local it = filtered[i]
 			lines[#lines + 1] = format_item_display(it, (i == selected_idx))
 		end
+
 		api.nvim_set_option_value("modifiable", true, { buf = list_buf })
 		api.nvim_buf_set_lines(list_buf, 0, -1, false, lines)
 		api.nvim_set_option_value("modifiable", false, { buf = list_buf })
 
 		-- highlights: clear then highlight selected line for clear visual focus
 		api.nvim_buf_clear_namespace(list_buf, ns, 0, -1)
-		if selected_idx >= 1 and selected_idx <= #filtered then
-			-- highlight the entire selected line
-			api.nvim_buf_set_extmark(list_buf, ns, selected_idx - 1, 0, { hl_group = "Visual" })
-			-- api.nvim_buf_add_highlight(list_buf, ns, "Visual", selected_idx - 1, 0, -1)
+		if selected_idx >= 1 and selected_idx <= total then
+			local visible_row = selected_idx - list_offset
+			if visible_row >= 0 and visible_row < #lines then
+				pcall(api.nvim_buf_set_extmark, list_buf, ns, visible_row, 0, { hl_group = "Visual", ephemeral = true })
+			end
 		end
 		-- Note: do NOT change windows/cursor here (we keep focus in search buffer)
 	end
@@ -528,16 +542,31 @@ function M.show(opts)
 			return
 		end
 		selected_idx = clamp(selected_idx + delta, 1, #filtered)
+		if selected_idx > list_offset + list_h - 1 then
+			list_offset = selected_idx - list_h + 1
+		elseif selected_idx < list_offset then
+			list_offset = selected_idx
+		end
+
+		-- clamp offset
+		list_offset = clamp(list_offset, 1, max_offset(#filtered, list_h))
 		render_list()
 	end
 
 	local function set_selection(index)
 		if #filtered == 0 then
 			selected_idx = 0
+			list_offset = 1
 			render_list()
 			return
 		end
 		selected_idx = clamp(index, 1, #filtered)
+		if selected_idx > list_offset + list_h - 1 then
+			list_offset = selected_idx - list_h + 1
+		elseif selected_idx < list_offset then
+			list_offset = selected_idx
+		end
+		list_offset = clamp(list_offset, 1, max_offset(#filtered, list_h))
 		render_list()
 	end
 
@@ -579,8 +608,10 @@ function M.show(opts)
 		-- after filtering, select first item automatically
 		if #filtered > 0 then
 			selected_idx = 1
+			list_offset = 1
 		else
 			selected_idx = 0
+			list_offset = 1
 		end
 		if #filtered == 0 then
 			api.nvim_set_option_value("modifiable", true, { buf = list_buf })
