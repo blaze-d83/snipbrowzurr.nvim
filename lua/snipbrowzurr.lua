@@ -37,8 +37,9 @@ end
 -- Parameters:
 -- - raw: (table) arbitrary nested table returned by luasnip.get_snippets
 -- - out: (table|nil) optional accumulator used during recursion
+-- - visited: (table | nil) optional checker to keep track of visited and avoid cycles
 --
--- flatten_snippets(raw, out) -> table
+-- flatten_snippets(raw, out, visited) -> table
 local function flatten_snippets(raw, out, visited)
 	out = out or {}
 	visited = visited or {}
@@ -79,7 +80,7 @@ local function flatten_snippets(raw, out, visited)
 		return out
 	end
 
-  -- Otherwise walk the table fields
+	-- Otherwise walk the table fields
 	for _, v in pairs(raw) do
 		if type(v) == "table" then
 			if vim.islist(v) then
@@ -126,6 +127,7 @@ local function collect_snippets(filetype)
 		return {}
 	end
 	filetype = filetype or get_filetype()
+	-- Get snippets for current filetype using luasnip api
 	local ok, raw = pcall(function()
 		return ls.get_snippets(filetype)
 	end)
@@ -135,7 +137,7 @@ local function collect_snippets(filetype)
 	if type(raw) == "table" and type(raw.tbl) == "table" then
 		raw = raw.tbl
 	end
-	return flatten_snippets(raw, {})
+	return flatten_snippets(raw, {}, {})
 end
 
 -- Returns: string label (never nil)
@@ -392,7 +394,6 @@ local function fuzzy_match(hay, pat)
 	return true
 end
 
-
 -- Build and show the UI
 function M.show(opts)
 	opts = opts or {}
@@ -475,6 +476,10 @@ function M.show(opts)
 	end
 
 	-- TODO: implement a scroll navigation
+	local function clamp(v, a, b)
+		return math.max(a, math.min(b, v))
+	end
+
 	local function render_list()
 		local lines = {}
 		for i, it in ipairs(filtered) do
@@ -518,16 +523,6 @@ function M.show(opts)
 		end
 	end
 
-	local function clamp(v, a, b)
-		if v < a then
-			return a
-		end
-		if v > b then
-			return b
-		end
-		return v
-	end
-
 	local function change_selection(delta)
 		if #filtered == 0 then
 			return
@@ -546,7 +541,7 @@ function M.show(opts)
 		render_list()
 	end
 
-  -- Filter the snippet list on each keystroke
+	-- Filter the snippet list on each keystroke
 	local function do_filter()
 		local ok, lines = pcall(api.nvim_buf_get_lines, search_buf, 0, -1, false)
 		if not ok then
@@ -627,6 +622,7 @@ function M.show(opts)
 		end
 	end
 
+	-- Keeps the user in insert mode on the search window while allowing navigation
 	vim.keymap.set("i", "<C-n>", nav_fn(1), { buffer = search_buf, silent = true })
 	vim.keymap.set("i", "<C-p>", nav_fn(-1), { buffer = search_buf, silent = true })
 	vim.keymap.set("i", "<C-j>", nav_fn(1), { buffer = search_buf, silent = true })
