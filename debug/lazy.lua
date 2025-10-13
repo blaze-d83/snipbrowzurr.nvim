@@ -26,36 +26,44 @@ vim.keymap.set("v", "<leader>x", ":lua<CR>")
 
 vim.cmd.colorscheme("default")
 
--- helper: path to this plugin repo root (where you placed debug/)
-local repo_root = vim.fn.fnamemodify(".", ":p") -- ends with /
+-- robustly compute repo root as the parent directory of this file (debug/ -> repo root)
+local this_file = debug.getinfo(1, "S").source:sub(2) -- remove leading '@'
+local repo_root = vim.fn.fnamemodify(this_file, ":p:h:h") -- up two levels (file -> debug -> repo root)
+
+-- plugin options for testing
+local plugin_opts = {
+	snippets_path = vim.fn.stdpath("config") .. "/snippets", -- ensure trailing slash
+	view_mode = "two-column",
+	preview = false,
+	load_vscode = true,
+	load_lua = true,
+	load_snipmate = true,
+	keymap = "<leader>ss", -- open snippet browser
+}
 
 require("lazy").setup({
 	-- LuaSnip (snippet engine)
-
 	{
 		"L3MON4D3/LuaSnip",
 		dependencies = {
 			"rafamadriz/friendly-snippets",
 		},
 		config = function()
-			require("luasnip.loaders.from_vscode").lazy_load()
+			-- load VSCode-style snippets shipped by friendly-snippets (optional)
+			pcall(function()
+				require("luasnip.loaders.from_vscode").lazy_load()
+			end)
 		end,
 	},
 
-	-- Your plugin under test (load from current directory)
+	-- Your plugin under test (load from current repository)
 	{
-		dir = repo_root, -- load the current plugin directory
-		dev = true, -- optional: enable dev mode (if you use lazy.nvim's dev features)
-		config = function()
-			-- IMPORTANT: snipbrowzurr.setup expects `keymap` (singular) per the plugin code
-			require("snipbrowzurr").setup({
-				snippets_path = vim.fn.stdpath("config") .. "snippets",
-				load_vscode = true,
-				load_lua = true,
-				load_snipmate = true,
-				keymap = "<leader>ss", -- open snippet browser
-				-- other test options can go here
-			})
+		dir = repo_root,
+		dev = true,
+		opts = plugin_opts,
+		config = function(_, opts)
+			-- pass opts directly (not wrapped)
+			require("snipbrowzurr").setup(opts)
 		end,
 	},
 })
