@@ -474,7 +474,7 @@ function M.show(call_opts)
 	-- format display for an item
 	local function format_item_display(it, is_selected)
 		local prefix = is_selected and "> " or " "
-		local trig = it.trigger ~= "" and ("[" .. it.trigger .. "]") or ""
+		local trig = it.trigger ~= "" and it.trigger or ""
 		local label = (it.label or ""):gsub("\t", " ")
 
 		if view_mode == "two-column" then
@@ -604,7 +604,19 @@ function M.show(call_opts)
 		render_list()
 	end
 
-	-- filtering logic
+	local function clone_items()
+		-- prefer deep copy (safest if items are tables that may be mutated elsewhere)
+		if vim.deepcopy then
+			return vim.deepcopy(items)
+		end
+		-- fallback: shallow copy of the items array (preserves item references)
+		local t = {}
+		for _, v in ipairs(items) do
+			table.insert(t, v)
+		end
+		return t
+	end
+
 	local function do_filter()
 		local ok, lines = pcall(api.nvim_buf_get_lines, search_buf, 0, -1, false)
 		if not ok then
@@ -612,13 +624,22 @@ function M.show(call_opts)
 		end
 		local q = (lines and lines[1]) or ""
 		q = vim.trim(q)
+
+		local prev_selected_item_idx = nil
+		if selected_idx >= 1 and selected_idx <= #filtered and filtered[selected_idx] then
+			prev_selected_item_idx = filtered[selected_idx]
+		end
+
 		if q == "" then
-			filtered = items
+			filtered = clone_items()
 		else
+			-- split query into tokens
 			local tokens = {}
 			for token in q:gmatch("%S+") do
 				table.insert(tokens, token)
 			end
+
+			-- build filtered list
 			local newf = {}
 			for _, it in ipairs(items) do
 				local hay = (it.label or "") .. " " .. (it.trigger or "")
@@ -638,12 +659,34 @@ function M.show(call_opts)
 
 		-- adjust selection
 		if #filtered > 0 then
-			selected_idx = 1
-			list_offset = 1
+			if prev_selected_item_idx then
+				local found = nil
+				for i, it in ipairs(filtered) do
+					if it.idx == prev_selected_item_idx then
+						found = i
+						break
+					end
+				end
+				if found then
+					selected_idx = found
+				end
+				selected_idx = 1
+				list_offset = 1
+			end
 		else
 			selected_idx = 0
 			list_offset = 1
 		end
+
+		if selected_idx >= 1 and #filtered > 0 then
+			if selected_idx > list_offset + list_h - 1 then
+				list_offset = selected_idx - list_h + 1
+			elseif selected_idx < list_offset then
+				list_offset = selected_idx
+			end
+			list_offset = clamp(list_offset, 1, max_offset(#filtered, list_h))
+		end
+
 		if #filtered == 0 then
 			api.nvim_set_option_value("modifiable", true, { buf = list_buf })
 			api.nvim_buf_set_lines(list_buf, 0, -1, false, { "<no matches>" })
@@ -659,7 +702,7 @@ function M.show(call_opts)
 		api.nvim_buf_attach(search_buf, false, {
 			on_lines = function()
 				vim.schedule(do_filter)
-				return true
+				return false
 			end,
 		})
 	end
