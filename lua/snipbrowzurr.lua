@@ -1,9 +1,4 @@
 -- lua/plugin/snipbrowzurr.lua
--- Minimal snippet browser for LuaSnip (search & selection improvements)
--- Option handling follows best practices:
---  - M.setup(user_opts) merges user_opts with M._defaults and stores in M._opts
---  - M.show(call_opts) merges call_opts on top of M._opts so per-call overrides work
---  - setup creates the keymap/command that call M.show() using stored defaults
 
 local M = {}
 local api = vim.api
@@ -401,7 +396,7 @@ function M.show(call_opts)
 	local ft = cfg.filetype or get_filetype()
 	local snippets = collect_snippets(ft)
 	local view_mode = (cfg.view and tostring(cfg.view)) or "list"
-	local preview_enabled = (cfg.preview == true)
+	-- local preview_enabled = (cfg.preview == true)
 
 	if #snippets == 0 then
 		vim.notify("No snippets found for filetype: " .. ft, vim.log.levels.INFO)
@@ -490,9 +485,9 @@ function M.show(call_opts)
 			local left_pad = pad_to_display(left_txt, left_w)
 			local right_pad = pad_to_display(right_txt, right_w)
 			return prefix .. left_pad .. string.rep(" ", gutter) .. right_pad
+      -- keeping list view simple without triggers
 		else
-			local trig_part = trig ~= "" and (" " .. trig) or ""
-			local out = prefix .. label .. trig_part
+			local out = prefix ..  label
 
 			local max_w = math.max(10, width - 2)
 			return utf8_truncate(out, max_w)

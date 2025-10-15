@@ -33,8 +33,7 @@ local repo_root = vim.fn.fnamemodify(this_file, ":p:h:h") -- up two levels (file
 -- plugin options for testing
 local plugin_opts = {
 	snippets_path = vim.fn.stdpath("config") .. "/snippets", -- ensure trailing slash
-	view_mode = "two-column",
-	preview = false,
+	-- view = "two-column",
 	load_vscode = true,
 	load_lua = true,
 	load_snipmate = true,
