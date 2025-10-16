@@ -6,24 +6,21 @@ local api = vim.api
 -- Default configuration (documented)
 M._defaults = {
 	keymap = "<leader>ss", -- string | false (don't create keymap)
-	snippets_path = nil, -- nil (use stdpath) | string | table
-	view = "list", -- "list" | "two-column" (accepts view_mode alias)
-	preview = false, -- boolean: show preview window by default
+	snippets_path = nil,   -- nil (use stdpath) | string | table
+	view = "list",         -- "list" | "two-column" (accepts view_mode alias)
+	preview = false,       -- boolean: show preview window by default
 	preview_side_margin = 2,
 	preview_max_width = 40,
-	load_vscode = true, -- boolean: lazy-load vscode loaders
-	load_lua = true, -- boolean: lazy-load lua loaders
-	load_snipmate = true, -- boolean: lazy-load snipmate loaders
-	on_select = nil, -- function(choice, ctx) => if returns true, treat as handled
+	load_vscode = true,    -- boolean: lazy-load vscode loaders
+	load_lua = true,       -- boolean: lazy-load lua loaders
+	load_snipmate = true,  -- boolean: lazy-load snipmate loaders
+	on_select = nil,       -- function(choice, ctx) => if returns true, treat as handled
 }
 
--- Helper: safe require
+-- Helper: safe require (returns ok, module_or_error)
 local function safe_require(name)
-	local ok, mod = pcall(require, name)
-	if not ok then
-		return nil
-	end
-	return mod
+	local ok, mod_or_err = pcall(require, name)
+	return ok, mod_or_err
 end
 
 -- Determine the filetype of the current buffer
@@ -142,15 +139,15 @@ end
 
 -- Collect snippets for a filetype using LuaSnip (safe)
 local function collect_snippets(filetype)
-	local ls = safe_require("luasnip")
-	if not ls then
+	local ok, ls = safe_require("luasnip")
+	if not ok or not ls then
 		return {}
 	end
 	filetype = filetype or get_filetype()
-	local ok, raw = pcall(function()
+	local ok2, raw = pcall(function()
 		return ls.get_snippets(filetype)
 	end)
-	if not ok or not raw or next(raw) == nil then
+	if not ok2 or not raw or next(raw) == nil then
 		return {}
 	end
 	if type(raw) == "table" and type(raw.tbl) == "table" then
@@ -248,10 +245,25 @@ local function try_expand_with_text(ls, text)
 	return false
 end
 
+-- Insert text at the current cursor position using buffer API (safer than nvim_put timing issues)
+local function insert_text_at_cursor(text, winid)
+	local txt = text or ""
+	local win = (winid and api.nvim_win_is_valid(winid)) and winid or api.nvim_get_current_win()
+	local buf = api.nvim_win_get_buf(win)
+	local row, col = unpack(api.nvim_win_get_cursor(win))
+	local lines = vim.split(txt, "\n", { plain = true })
+	-- set_text expects 0-indexed row/col
+	pcall(api.nvim_buf_set_text, buf, row - 1, col, row - 1, col, lines)
+	-- move cursor to end of inserted text
+	local last_line = #lines
+	local last_col = #lines[last_line]
+	pcall(api.nvim_win_set_cursor, win, { row + last_line - 1, last_col })
+end
+
 -- Expand snippet (or fallback insert text) in a given window
 local function expand_snippet_in_window(winid, snip_or_text)
-	local ls = safe_require("luasnip")
-	if not ls then
+	local ok, ls = safe_require("luasnip")
+	if not ok or not ls then
 		vim.notify("LuaSnip not found: cannot expand snippet", vim.log.levels.ERROR)
 		return
 	end
@@ -281,15 +293,15 @@ local function expand_snippet_in_window(winid, snip_or_text)
 			end
 		end
 		if type(sn.get_doc) == "function" then
-			local ok, doc = pcall(sn.get_doc, sn)
-			if ok and type(doc) == "string" and doc ~= "" then
+			local ok2, doc = pcall(sn.get_doc, sn)
+			if ok2 and type(doc) == "string" and doc ~= "" then
 				if try_expand_with_text(ls, doc) then
 					return
 				end
 			end
 		end
 		if sn.nodes and type(sn.nodes) == "table" and #sn.nodes > 0 then
-			local ok, _ = pcall(function()
+			local ok2, _ = pcall(function()
 				if ls.snip_expand then
 					ls.snip_expand(sn)
 				else
@@ -302,7 +314,7 @@ local function expand_snippet_in_window(winid, snip_or_text)
 					end
 				end
 			end)
-			if ok then
+			if ok2 then
 				return
 			end
 		end
@@ -315,18 +327,18 @@ local function expand_snippet_in_window(winid, snip_or_text)
 		and ls.parser.parse_snippet
 		and ls.snip_expand
 	then
-		local ok, _ = pcall(function()
+		local ok3, _ = pcall(function()
 			local parsed = ls.parser.parse_snippet(nil, snip_or_text, {})
 			ls.snip_expand(parsed)
 		end)
-		if ok then
+		if ok3 then
 			return
 		end
 	end
 
-	-- Fallback: Insert plain text insertion into buffer
+	-- Fallback: Insert plain text insertion into buffer (safer path)
 	local text = snippet_body_text(snip_or_text)
-	api.nvim_put(vim.split(text, "\n", { plain = true }), "c", true, true)
+	insert_text_at_cursor(text, winid)
 	vim.notify("Snippet expansion failed; inserted fallback text", vim.log.levels.WARN)
 end
 
@@ -377,6 +389,10 @@ local function fuzzy_match(hay, pat)
 	return true
 end
 
+local function make_counter_text(f, t)
+	return string.format("%d/%d", f or 0, t or 0)
+end
+
 -- Build and show the UI
 function M.show(call_opts)
 	-- Ensure stored setup opts exist
@@ -396,7 +412,6 @@ function M.show(call_opts)
 	local ft = cfg.filetype or get_filetype()
 	local snippets = collect_snippets(ft)
 	local view_mode = (cfg.view and tostring(cfg.view)) or "list"
-	-- local preview_enabled = (cfg.preview == true)
 
 	if #snippets == 0 then
 		vim.notify("No snippets found for filetype: " .. ft, vim.log.levels.INFO)
@@ -421,17 +436,23 @@ function M.show(call_opts)
 	local list_h = math.max(3, height - search_h)
 	local row = math.floor((vim.o.lines - height) / 2)
 	local col = math.floor((vim.o.columns - width) / 2)
+	-- start with a reasonable counter width; we'll recompute on first render
+	local counter_w = 5
 
 	-- create buffers
 	local search_buf = api.nvim_create_buf(false, true)
 	local list_buf = api.nvim_create_buf(false, true)
+	local counter_buf = api.nvim_create_buf(false, true)
 
 	api.nvim_set_option_value("bufhidden", "wipe", { buf = search_buf })
 	api.nvim_set_option_value("bufhidden", "wipe", { buf = list_buf })
+	api.nvim_set_option_value("bufhidden", "wipe", { buf = counter_buf })
 	api.nvim_set_option_value("buftype", "nofile", { buf = search_buf })
 	api.nvim_set_option_value("buftype", "nofile", { buf = list_buf })
+	api.nvim_set_option_value("buftype", "nofile", { buf = counter_buf })
 	api.nvim_set_option_value("modifiable", true, { buf = search_buf })
 	api.nvim_set_option_value("modifiable", false, { buf = list_buf })
+	api.nvim_set_option_value("modifiable", true, { buf = counter_buf })
 	api.nvim_set_option_value("filetype", "snipbrowzurr_search", { buf = search_buf })
 	pcall(api.nvim_buf_set_name, search_buf, "SnipSearch")
 	pcall(api.nvim_buf_set_lines, search_buf, 0, -1, false, { "" })
@@ -461,7 +482,14 @@ function M.show(call_opts)
 	})
 
 	-- state: filtered list and selected index
-	local filtered = vim.deepcopy(items)
+	local filtered = vim.deepcopy and vim.deepcopy(items)
+		or (function()
+			local t = {}
+			for _, v in ipairs(items) do
+				table.insert(t, v)
+			end
+			return t
+		end)()
 	local selected_idx = (#filtered > 0) and 1 or 0
 	local list_offset = 1
 	local ns = api.nvim_create_namespace("snipbrowzurr")
@@ -485,9 +513,8 @@ function M.show(call_opts)
 			local left_pad = pad_to_display(left_txt, left_w)
 			local right_pad = pad_to_display(right_txt, right_w)
 			return prefix .. left_pad .. string.rep(" ", gutter) .. right_pad
-      -- keeping list view simple without triggers
 		else
-			local out = prefix ..  label
+			local out = prefix .. label
 
 			local max_w = math.max(10, width - 2)
 			return utf8_truncate(out, max_w)
@@ -500,6 +527,100 @@ function M.show(call_opts)
 
 	local function max_offset(total, h)
 		return math.max(1, total - h + 1)
+	end
+
+	-- counter window (created on-demand)
+	local counter_win = nil
+
+	-- ensure counter_buf exists and has the right options (recreate if needed)
+	local function ensure_counter_buf()
+		if not (counter_buf and api.nvim_buf_is_valid(counter_buf)) then
+			counter_buf = api.nvim_create_buf(false, true)
+			-- same setup as initial creation
+			api.nvim_set_option_value("bufhidden", "wipe", { buf = counter_buf })
+			api.nvim_set_option_value("buftype", "nofile", { buf = counter_buf })
+			api.nvim_set_option_value("modifiable", true, { buf = counter_buf })
+			pcall(api.nvim_buf_set_lines, counter_buf, 0, -1, false, { "" })
+		end
+	end
+
+	local function open_counter()
+		-- if main list buffer or list window is gone, don't open
+		if not (list_buf and api.nvim_buf_is_valid(list_buf)) then
+			return
+		end
+
+		-- ensure we have a valid counter buffer
+		ensure_counter_buf()
+
+		if counter_win and api.nvim_win_is_valid(counter_win) then
+			pcall(api.nvim_win_close, counter_win, true)
+		end
+
+		-- create counter window above other floats using zindex
+		local ok, win = pcall(api.nvim_open_win, counter_buf, false, {
+			relative = "editor",
+			row = row + search_h,
+			col = col + width - counter_w - 1,
+			width = counter_w,
+			height = 1,
+			style = "minimal",
+			border = "none",
+			focusable = false,
+			zindex = 200,
+		})
+		if ok and win then
+			counter_win = win
+		else
+			-- if opening failed, make sure counter_win is nil
+			counter_win = nil
+		end
+	end
+
+	local function update_counter()
+		-- If main buffers/windows have been cleaned up, bail out early to avoid crashes
+		if not (list_buf and api.nvim_buf_is_valid(list_buf)) then
+			return
+		end
+
+		local total = #items - 1 or 0
+		local fcount = #filtered - 1 or 0
+
+		local text
+		if total == 0 and filtered == 0 then
+			text = "0"
+		elseif fcount == total then
+			text = tostring(total)
+		elseif fcount > 0 and fcount < total then
+			text = make_counter_text(fcount, total)
+		else
+			text = make_counter_text(0, total)
+		end
+
+		-- ensure counter buffer exists
+		ensure_counter_buf()
+
+		-- write the counter text into buffer
+		if api.nvim_buf_is_valid(counter_buf) then
+			api.nvim_set_option_value("modifiable", true, { buf = counter_buf })
+			pcall(api.nvim_buf_set_lines, counter_buf, 0, -1, false, { text })
+			api.nvim_set_option_value("modifiable", false, { buf = counter_buf })
+		end
+
+		-- compute display width using strdisplaywidth (handles wide/unicode chars)
+		local new_w = math.max(3, vim.fn.strdisplaywidth(text) + 2) -- small padding
+		if new_w ~= counter_w or not (counter_win and api.nvim_win_is_valid(counter_win)) then
+			counter_w = new_w
+			open_counter()
+		else
+			pcall(api.nvim_win_set_config, counter_win, {
+				relative = "editor",
+				row = row + search_h,
+				col = col + width - counter_w - 1,
+				width = counter_w,
+				height = 1,
+			})
+		end
 	end
 
 	-- render list window
@@ -527,7 +648,7 @@ function M.show(call_opts)
 				pcall(api.nvim_buf_set_extmark, list_buf, ns, visible_row, 0, { hl_group = "Visual", ephemeral = true })
 			end
 		end
-		-- Note: do NOT change windows/cursor here (we keep focus in search buffer)
+		update_counter()
 	end
 
 	render_list()
@@ -536,11 +657,17 @@ function M.show(call_opts)
 	local function close_popup()
 		safe_close_win(search_win)
 		safe_close_win(list_win)
+		safe_close_win(counter_win)
 		safe_delete_buf(search_buf)
 		safe_delete_buf(list_buf)
+		safe_delete_buf(counter_buf)
 		if orig_win and api.nvim_win_is_valid(orig_win) then
 			api.nvim_set_current_win(orig_win)
 		end
+		-- release big tables to allow GC
+		items = nil
+		filtered = nil
+		ns = 0
 	end
 
 	-- selection behaviour: call on_select callback if present, otherwise expand
@@ -549,21 +676,26 @@ function M.show(call_opts)
 			return
 		end
 		local choice = filtered[selected_idx]
-		close_popup()
 		if not choice then
 			return
 		end
 
+		-- choose a safe target window (fallback to current if original is gone)
+		local target_win = (orig_win and api.nvim_win_is_valid(orig_win)) and orig_win or api.nvim_get_current_win()
+
 		-- If user supplied on_select and it returns true, assume handled
 		if cfg.on_select and type(cfg.on_select) == "function" then
-			local ok, handled = pcall(cfg.on_select, choice.raw, { orig_win = orig_win, index = selected_idx })
+			local ok, handled =
+				pcall(cfg.on_select, choice.raw, { orig_win = orig_win, index = selected_idx, target_win = target_win })
 			if ok and handled == true then
+				close_popup()
 				return
 			end
 		end
 
-		-- default behavior: expand snippet into original window
-		expand_snippet_in_window(orig_win, choice.raw)
+		-- default behavior: close popup then expand snippet into target window
+		close_popup()
+		expand_snippet_in_window(target_win, choice.raw)
 	end
 
 	-- change selection
@@ -578,23 +710,6 @@ function M.show(call_opts)
 			list_offset = selected_idx
 		end
 
-		list_offset = clamp(list_offset, 1, max_offset(#filtered, list_h))
-		render_list()
-	end
-
-	local function set_selection(index)
-		if #filtered == 0 then
-			selected_idx = 0
-			list_offset = 1
-			render_list()
-			return
-		end
-		selected_idx = clamp(index, 1, #filtered)
-		if selected_idx > list_offset + list_h - 1 then
-			list_offset = selected_idx - list_h + 1
-		elseif selected_idx < list_offset then
-			list_offset = selected_idx
-		end
 		list_offset = clamp(list_offset, 1, max_offset(#filtered, list_h))
 		render_list()
 	end
@@ -622,7 +737,7 @@ function M.show(call_opts)
 
 		local prev_selected_item_idx = nil
 		if selected_idx >= 1 and selected_idx <= #filtered and filtered[selected_idx] then
-			prev_selected_item_idx = filtered[selected_idx]
+			prev_selected_item_idx = filtered[selected_idx].idx
 		end
 
 		if q == "" then
@@ -664,9 +779,13 @@ function M.show(call_opts)
 				end
 				if found then
 					selected_idx = found
+				else
+					selected_idx = 1
+					-- list_offset = 1
 				end
-				selected_idx = 1
 				list_offset = 1
+			else
+				selected_idx = clamp(selected_idx, 1, #filtered)
 			end
 		else
 			selected_idx = 0
@@ -687,6 +806,7 @@ function M.show(call_opts)
 			api.nvim_buf_set_lines(list_buf, 0, -1, false, { "<no matches>" })
 			api.nvim_set_option_value("modifiable", false, { buf = list_buf })
 			api.nvim_buf_clear_namespace(list_buf, ns, 0, -1)
+			update_counter()
 		else
 			render_list()
 		end
@@ -695,11 +815,16 @@ function M.show(call_opts)
 	-- attach to search buffer for live filtering
 	if api.nvim_buf_is_valid(search_buf) then
 		api.nvim_buf_attach(search_buf, false, {
-			on_lines = function()
-				vim.schedule(do_filter)
+			on_lines = function(_, _, _, firstline, _, _, _)
+				-- only react when the first line changed (single-line search buffer)
+				if firstline <= 0 then
+					vim.schedule(do_filter)
+				end
 				return false
 			end,
 		})
+		-- ensure initial filter state matches the buffer contents
+		do_filter()
 	end
 
 	-- mappings for search buffer (insert mode friendly)
