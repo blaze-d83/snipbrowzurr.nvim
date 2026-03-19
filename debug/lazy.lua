@@ -60,6 +60,7 @@ require("lazy").setup({
 		dir = repo_root,
 		dev = true,
 		opts = plugin_opts,
+		dependencies = {"ibhagwan/fzf-lua"},
 		config = function(_, opts)
 			-- pass opts directly (not wrapped)
 			require("snipbrowzurr").setup(opts)
