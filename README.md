@@ -10,21 +10,10 @@ Add the plugin to your 'lazy' spec (example minimal):
 ```lua
 {
     "blaze-d83/snipbrowzurr.nvim",
-    branch = "stable"
+    dependencies = { "ibhagwan/fzf-lua" },
     config = function()
         require("snipbrowzurr").setup({ keymap = "<leader>sp" })
     end,
-}
-```
-
-### packer.nvim
-```lua
-use {
-    'blaze-d83/snipbrowzurr.nvim',
-    branch = "stable"
-    config = function()
-        require('snippet_browser').setup({ keymap = '<leader>sp' })
-    end
 }
 ```
 

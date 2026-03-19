@@ -180,7 +180,6 @@ local function preview_body_text(sn)
 		return "(empty snippet body)"
 	end
 
-	-- LuaSnip pre-renders a clean docstring; try that first
 	if type(sn.get_docstring) == "function" then
 		local ok, doc = pcall(sn.get_docstring, sn)
 		if ok and type(doc) == "table" and #doc > 0 then
@@ -194,7 +193,6 @@ local function preview_body_text(sn)
 		return sn.docstring
 	end
 
-	-- VSCode/snipmate style: body is still a plain string or array
 	local body = snippet_body_text(sn)
 	if body ~= "" then
 		body = body:gsub("%${%d+:([^}]*)}", "%1")
