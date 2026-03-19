@@ -13,7 +13,7 @@ Add the plugin to your 'lazy' spec (example minimal):
 		{
 			"L3MON4D3/LuaSnip",
 		},
-		"ibhagwan/fza-lua",
+		"ibhagwan/fzf-lua",
 	},
 	config = function()
 		require("snipbrowzurr").setup({
