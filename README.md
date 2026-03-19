@@ -8,13 +8,19 @@ Tiny plugin to quickly browse snippets set for the current file-type.
 ### lazy.nvim
 Add the plugin to your 'lazy' spec (example minimal):
 ```lua
-{
-    "blaze-d83/snipbrowzurr.nvim",
-    dependencies = { "ibhagwan/fzf-lua" },
-    config = function()
-        require("snipbrowzurr").setup({ keymap = "<leader>sp" })
-    end,
-}
+	"blaze-d83/snipbrowzurr.nvim",
+	dependencies = {
+		{
+			"L3MON4D3/LuaSnip",
+		},
+		"ibhagwan/fza-lua",
+	},
+	config = function()
+		require("snipbrowzurr").setup({
+			keymap = "<leader>sp",
+		})
+	end,
+
 ```
 
 # Configuration
