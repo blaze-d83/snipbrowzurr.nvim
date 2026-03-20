@@ -90,7 +90,6 @@ end
 
 -- Collect snippets for a filetype using LuaSnip (safe)
 local function collect_snippets(filetype)
-
 	local ok, ls = safe_require("luasnip")
 	if not ok or not ls then
 		return {}
@@ -208,35 +207,6 @@ local function preview_body_text(sn)
 	return "(empty snippet body)"
 end
 
--- Try expanding text via LuaSnip extension points
-local function try_expand_with_text(ls, text)
-	if not text or text == "" then
-		return false
-	end
-	local function try_one(fn)
-		local ok, _ = pcall(fn)
-		return ok
-	end
-	if ls.lsp_expand then
-		if try_one(function()
-			ls.lsp_expand(text)
-		end) then
-			return true
-		end
-	end
-	if ls.parser and ls.parser.parse_snippet and ls.snip_expand then
-		if
-			try_one(function()
-				local parsed = ls.parser.parse_snippet(nil, text, {})
-				ls.snip_expand(parsed)
-			end)
-		then
-			return true
-		end
-	end
-	return false
-end
-
 -- Insert text at the current cursor position using buffer API
 local function insert_text_at_cursor(text, winid)
 	local txt = text or ""
@@ -253,86 +223,26 @@ local function insert_text_at_cursor(text, winid)
 	pcall(api.nvim_win_set_cursor, win, { row + last_line - 1, last_col })
 end
 
--- Expand snippet (or fallback insert text) in a given window
-local function expand_snippet_in_window(winid, snip_or_text)
+-- Expand snippet via LuaSnip's native trigger pipeline (preserves jump nodes)
+local function expand_snippet_in_window(winid, sn)
 	local ok, ls = safe_require("luasnip")
-	if not ok or not ls then
-		vim.notify("LuaSnip not found: cannot expand snippet", vim.log.levels.ERROR)
+	if not ok or not ls or not ls.snip_expand then
+		vim.notify("LuaSnip not found", vim.log.levels.ERROR)
 		return
 	end
-	if winid and api.nvim_win_is_valid(winid) then
-		api.nvim_set_current_win(winid)
-	end
-	if vim.fn.mode() ~= "i" then
-		vim.cmd("startinsert!")
-	end
 
-	if type(snip_or_text) == "string" and snip_or_text ~= "" then
-		if try_expand_with_text(ls, snip_or_text) then
-			return
+	vim.schedule(function()
+		if winid and api.nvim_win_is_valid(winid) then
+			api.nvim_set_current_win(winid)
 		end
-	end
 
-	if type(snip_or_text) == "table" then
-		local sn = snip_or_text
-		if type(sn.body) == "string" then
-			if try_expand_with_text(ls, sn.body) then
-				return
-			end
-		elseif type(sn.body) == "table" then
-			local body = table.concat(sn.body, "\n")
-			if try_expand_with_text(ls, body) then
-				return
-			end
-		end
-		if type(sn.get_doc) == "function" then
-			local ok2, doc = pcall(sn.get_doc, sn)
-			if ok2 and type(doc) == "string" and doc ~= "" then
-				if try_expand_with_text(ls, doc) then
-					return
-				end
-			end
-		end
-		if sn.nodes and type(sn.nodes) == "table" and #sn.nodes > 0 then
-			local ok2, _ = pcall(function()
-				if ls.snip_expand then
-					ls.snip_expand(sn)
-				else
-					local body = snippet_body_text(sn)
-					local parsed = ls.parser and ls.parser.parse_snippet and ls.parser.parse_snippet(nil, body, {})
-					if parsed and ls.snip_expand then
-						ls.snip_expand(parsed)
-					else
-						error("no snip_expand available")
-					end
-				end
-			end)
-			if ok2 then
-				return
-			end
-		end
-	end
+		-- "x" executes keys synchronously, so insert mode is active
+		-- by the time snip_expand is called on the next line
+		local i = api.nvim_replace_termcodes("i", true, false, true)
+		api.nvim_feedkeys(i, "x", false)
 
-	if
-		type(snip_or_text) == "string"
-		and snip_or_text ~= ""
-		and ls.parser
-		and ls.parser.parse_snippet
-		and ls.snip_expand
-	then
-		local ok3, _ = pcall(function()
-			local parsed = ls.parser.parse_snippet(nil, snip_or_text, {})
-			ls.snip_expand(parsed)
-		end)
-		if ok3 then
-			return
-		end
-	end
-
-	-- Fallback: Insert plain text insertion into buffer (safer path)
-	local text = snippet_body_text(snip_or_text)
-	insert_text_at_cursor(text, winid)
-	vim.notify("Snippet expansion failed; inserted fallback text", vim.log.levels.WARN)
+		ls.snip_expand(sn)
+	end)
 end
 
 -- Build snippet entries
@@ -418,7 +328,7 @@ function M.show(call_opts)
 		return preview_body_text(e.raw)
 	end
 
-    -- Fzf
+	-- Fzf
 	local ok, fzf = safe_require("fzf-lua")
 	if ok and type(fzf.fzf_exec) == "function" then
 		local orig_win = api.nvim_get_current_win()
@@ -451,7 +361,7 @@ function M.show(call_opts)
 		return
 	end
 
-    -- vim UI (fallback if fzf not setup)
+	-- vim UI (fallback if fzf not setup)
 	local orig_win = api.nvim_get_current_win()
 
 	vim.ui.select(entries, {
