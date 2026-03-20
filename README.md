@@ -2,6 +2,8 @@
 
 Browse, preview, and expand LuaSnip snippets via fzf-lua (falls back to `vim.ui.select`).
 
+![Demo](assets/demo.gif)
+
 ## Requirements
 
 - [LuaSnip](https://github.com/L3MON4D3/LuaSnip)
