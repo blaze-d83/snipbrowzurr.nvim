@@ -7,18 +7,22 @@ local api = vim.api
 M._defaults = {
 	keymap = "<leader>ss", -- string | false (don't create keymap)
 	snippets_path = nil, -- nil (use stdpath) | string | table
-	view = "list", -- "list" | "two-column" (accepts view_mode alias)
+
+	-- Preview
 	preview = true, -- boolean: show preview window by default
 	preview_side_margin = 2,
 	preview_max_width = 40,
-	load_vscode = true, -- boolean: lazy-load vscode loaders
-	load_lua = true, -- boolean: lazy-load lua loaders
-	load_snipmate = true, -- boolean: lazy-load snipmate loaders
+
+	-- These are optional users are expected to load them in LuaSnip
+	load_vscode = false, -- boolean: lazy-load vscode loaders
+	load_lua = false, -- boolean: lazy-load lua loaders
+	load_snipmate = false, -- boolean: lazy-load snipmate loaders
+
 	on_select = nil, -- function(choice, ctx) => if returns true, treat as handled
-	lazy = true,
 }
 
-M._opts = vim.deepcopy(M._defaults)
+-- Internal cache for snippet entries per filetype
+local _cache = {}
 
 -- Helper: safe require (returns ok, module_or_error)
 local function safe_require(name)
@@ -35,10 +39,13 @@ local function get_filetype()
 	return vim.filetype.match({ buf = 0 }) or "text"
 end
 
+-- Check if raw data looks like snippet
 local function look_like_a_snippet(tbl)
 	if type(tbl) ~= "table" then
 		return false
 	end
+
+	-- Looks like a snippet if it contains:
 	if tbl.body or tbl.trigger or tbl.prefix or tbl.get_doc or tbl.nodes then
 		return true
 	end
@@ -57,20 +64,6 @@ local function flatten_snippets(raw, out, visited)
 	end
 	visited[raw] = true
 
-	if vim.islist(raw) then
-		for _, v in ipairs(raw) do
-			if type(v) == "table" then
-				flatten_snippets(v, out, visited)
-			end
-		end
-		return out
-	end
-
-	if look_like_a_snippet(raw) then
-		table.insert(out, raw)
-		return out
-	end
-
 	for _, v in pairs(raw) do
 		if type(v) == "table" then
 			if vim.islist(v) then
@@ -81,7 +74,10 @@ local function flatten_snippets(raw, out, visited)
 				end
 			else
 				if look_like_a_snippet(v) then
-					table.insert(out, v)
+					if not visited[v] then
+						visited[v] = true
+						table.insert(out, v)
+					end
 				else
 					flatten_snippets(v, out, visited)
 				end
@@ -94,13 +90,15 @@ end
 
 -- Collect snippets for a filetype using LuaSnip (safe)
 local function collect_snippets(filetype)
-	-- Require Luasnip
+
 	local ok, ls = safe_require("luasnip")
 	if not ok or not ls then
 		return {}
 	end
 
 	filetype = filetype or get_filetype()
+
+	-- LuaSnip API get_snippets
 	local ok2, raw = pcall(function()
 		if ls.get_snippets then
 			return ls.get_snippets(filetype)
@@ -175,6 +173,8 @@ local function snippet_body_text(sn)
 	end)
 	return (ok and s) or ""
 end
+
+-- Preview snippet body (no blob)
 local function preview_body_text(sn)
 	if not sn then
 		return "(empty snippet body)"
@@ -237,11 +237,12 @@ local function try_expand_with_text(ls, text)
 	return false
 end
 
--- Insert text at the current cursor position using buffer API (safer than nvim_put timing issues)
+-- Insert text at the current cursor position using buffer API
 local function insert_text_at_cursor(text, winid)
 	local txt = text or ""
 	local win = (winid and api.nvim_win_is_valid(winid)) and winid or api.nvim_get_current_win()
 	local buf = api.nvim_win_get_buf(win)
+	unpack = table.unpack or unpack
 	local row, col = unpack(api.nvim_win_get_cursor(win))
 	local lines = vim.split(txt, "\n", { plain = true })
 	-- set_text expects 0-indexed row/col
@@ -334,9 +335,6 @@ local function expand_snippet_in_window(winid, snip_or_text)
 	vim.notify("Snippet expansion failed; inserted fallback text", vim.log.levels.WARN)
 end
 
--- Internal cache for snippet entries per filetype
-local _cache = {}
-
 -- Build snippet entries
 local function build_entries_for_ft(ft)
 	ft = ft or get_filetype()
@@ -346,11 +344,15 @@ local function build_entries_for_ft(ft)
 
 	local raw = collect_snippets(ft)
 	local items = {}
-	for i, sn in ipairs(raw) do
-		local trigger = sn.trigger or sn.trig or sn.prefix or ""
-		local label = snippet_label(sn)
-		local display = string.format("%s\t%s", trigger, label:gsub("\t", "   "))
-		table.insert(items, { display = display, raw = sn, trigger = trigger, label = label })
+	local seen = {}
+	for _, sn in ipairs(raw) do
+		if not seen[sn] then
+			seen[sn] = true
+			local trigger = sn.trigger or sn.trig or sn.prefix or ""
+			local label = snippet_label(sn)
+			local display = string.format("%s\t%s", trigger, label:gsub("\t", "   "))
+			table.insert(items, { display = display, raw = sn, trigger = trigger, label = label })
+		end
 	end
 	_cache[ft] = items
 	return items
@@ -364,6 +366,7 @@ function M.clear_cache(filetype)
 	end
 end
 
+-- Expands snippet in editor window on <enter>
 local function expand_selected_entries(entries_map, selected, winid)
 	if not selected or #selected == 0 then
 		return
@@ -372,8 +375,8 @@ local function expand_selected_entries(entries_map, selected, winid)
 		local e = entries_map[sel]
 		if e then
 			local handled = false
-			if type(M._opts.on_select) == "function" then
-				local ok, result = pcall(M._opts.on_select, e, { winid = winid })
+			if type(M._defaults.on_select) == "function" then
+				local ok, result = pcall(M._defaults.on_select, e, { winid = winid })
 				handled = ok and result == true
 			end
 			if not handled then
@@ -387,16 +390,11 @@ end
 function M.show(call_opts)
 	-- Merge stored setup opts with per-call opts; call_opts take precedence
 	call_opts = call_opts or {}
-	-- Accept alias view_mode -> view if provided per-call
-	if call_opts.view_mode and not call_opts.view then
-		call_opts.view = call_opts.view_mode
-	end
-	local cfg = vim.tbl_extend("force", M._opts, call_opts)
 
-	-- resolved UI options
+	local cfg = vim.tbl_extend("force", M._defaults, call_opts)
+
 	local ft = (cfg.filetype and cfg.filetype ~= "") and cfg.filetype or get_filetype()
 	local entries = build_entries_for_ft(ft)
-	-- local view_mode = (cfg.view and tostring(cfg.view)) or "list"
 
 	if not entries or #entries == 0 then
 		vim.notify("No snippets found for filetype: " .. ft, vim.log.levels.INFO)
@@ -411,6 +409,16 @@ function M.show(call_opts)
 		entries_map[e.display] = e
 	end
 
+	-- Prepare sanitized data for fzf-preview
+	local preview_fn = function(items)
+		local e = entries_map[items[1]]
+		if not e then
+			return "No preview available"
+		end
+		return preview_body_text(e.raw)
+	end
+
+    -- Fzf
 	local ok, fzf = safe_require("fzf-lua")
 	if ok and type(fzf.fzf_exec) == "function" then
 		local orig_win = api.nvim_get_current_win()
@@ -418,13 +426,6 @@ function M.show(call_opts)
 		if not ok_shell then
 			vim.notify("fzf-lua.shell not available", vim.log.levels.ERROR)
 			return
-		end
-		local preview_fn = function(items)
-			local e = entries_map[items[1]]
-			if not e then
-				return "No preview available"
-			end
-			return preview_body_text(e.raw)
 		end
 		local fzf_opts = {
 			prompt = "Search > ",
@@ -443,24 +444,6 @@ function M.show(call_opts)
 				["default"] = function(selected)
 					expand_selected_entries(entries_map, selected, orig_win)
 				end,
-
-				["ctrl-y"] = function(selected)
-					local text = {}
-					if not selected or #selected == 0 then
-						return
-					end
-					for _, s in ipairs(selected) do
-						local e = entries_map[s]
-						if e then
-							text[#text + 1] = preview_body_text(e.raw)
-						end
-					end
-
-					if #text > 0 then
-						vim.fn.setreg("+", table.concat(text, "\n\n"))
-						vim.notify("Copied snippet body to register (+)", vim.log.levels.INFO)
-					end
-				end,
 			},
 		}
 
@@ -468,6 +451,7 @@ function M.show(call_opts)
 		return
 	end
 
+    -- vim UI (fallback if fzf not setup)
 	local orig_win = api.nvim_get_current_win()
 
 	vim.ui.select(entries, {
@@ -491,29 +475,29 @@ end
 -- Setup: merge & persist user options, create command & keymap, and load snippet loaders
 function M.setup(opts)
 	opts = opts or {}
-	M._opts = vim.tbl_extend("force", M._defaults, opts)
+	M._defaults = vim.tbl_extend("force", M._defaults, opts)
 
 	local ok, ls = safe_require("luasnip")
 	if ok and ls then
-		if M._opts.load_vscode then
+		if M._defaults.load_vscode then
 			pcall(function()
 				require("luasnip.loaders.from_vscode").lazy_load()
 			end)
 		end
-		if M._opts.load_lua then
+		if M._defaults.load_lua then
 			pcall(function()
 				require("luasnip.loaders.from_lua").lazy_load()
 			end)
 		end
-		if M._opts.load_snipmate then
+		if M._defaults.load_snipmate then
 			pcall(function()
 				require("luasnip.loaders.from_snipmate").lazy_load()
 			end)
 		end
 	end
 
-	if M._opts.keymap and type(M._opts.keymap) == "string" and M._opts.keymap ~= "" then
-		pcall(vim.keymap.set, "n", M._opts.keymap, function()
+	if M._defaults.keymap and type(M._defaults.keymap) == "string" and M._defaults.keymap ~= "" then
+		pcall(vim.keymap.set, "n", M._defaults.keymap, function()
 			M.open()
 		end, { noremap = true, silent = true, desc = "Snipbrowzurr: search snippets" })
 	end
